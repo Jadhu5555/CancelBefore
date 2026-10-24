@@ -2,13 +2,9 @@ name: Android CI & APK Distribution
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       build_release_if_signed:
@@ -17,13 +13,12 @@ on:
         default: true
         type: boolean
   release:
-    types:
-      - published
+    types: [published]
 
 permissions:
   contents: write
 
-# Queue runs for the same branch instead of cancelling a build in progress.
+# Do not cancel an active build just because another commit was pushed.
 concurrency:
   group: android-apk-${{ github.ref }}
   cancel-in-progress: false
@@ -44,17 +39,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Grant Execute Permission for Gradle Wrapper
-        run: chmod +x gradlew
-
-      - name: Generate Debug Keystore
+      - name: Install Required Android SDK Packages
         shell: bash
         run: |
           set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-36" \
+            "platforms;android-36-ext1" \
+            "build-tools;36.0.0"
+          yes | sdkmanager --licenses
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          test -f gradle/wrapper/gradle-wrapper.properties
+
+      - name: Generate Temporary Debug Keystore
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ ! -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
             keytool -genkeypair \
               -keystore "$GITHUB_WORKSPACE/debug.keystore" \
@@ -74,8 +85,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: app/build/reports/tests/testDebugUnitTest/
+          name: cancelbefore-test-results
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
           retention-days: 7
           if-no-files-found: ignore
 
@@ -95,17 +108,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Grant Execute Permission for Gradle Wrapper
-        run: chmod +x gradlew
-
-      - name: Generate Debug Keystore
+      - name: Install Required Android SDK Packages
         shell: bash
         run: |
           set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-36" \
+            "platforms;android-36-ext1" \
+            "build-tools;36.0.0"
+          yes | sdkmanager --licenses
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          test -f gradle/wrapper/gradle-wrapper.properties
+
+      - name: Generate Temporary Debug Keystore
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ ! -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
             keytool -genkeypair \
               -keystore "$GITHUB_WORKSPACE/debug.keystore" \
@@ -118,28 +147,24 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Prepare Output Directory
-        run: mkdir -p dist
-
       - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
-
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$DEBUG_APK" ]; then
-            echo "::error::Debug APK not found at $DEBUG_APK"
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::APK was not found at $APK_PATH"
+            find app/build/outputs -maxdepth 5 -type f -print || true
             exit 1
           fi
 
-          cp "$DEBUG_APK" dist/CancelBefore-debug.apk
-          sha256sum dist/CancelBefore-debug.apk
+          mkdir -p dist
+          cp "$APK_PATH" dist/CancelBefore-debug.apk
           ls -lh dist/CancelBefore-debug.apk
 
-      - name: Build Signed Release APK If Configured
+      - name: Build Signed Release APK If Secrets Exist
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_release_if_signed }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -152,7 +177,7 @@ jobs:
           if [ -z "${KEYSTORE_BASE64:-}" ] ||
              [ -z "${STORE_PASSWORD:-}" ] ||
              [ -z "${KEY_PASSWORD:-}" ]; then
-            echo "Signing secrets are not configured; skipping release APK."
+            echo "Release signing secrets are not configured; skipping signed release APK."
             exit 0
           fi
 
@@ -160,41 +185,29 @@ jobs:
           trap 'rm -f "$KEYSTORE_FILE"' EXIT
 
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
-
-          if [ ! -s "$KEYSTORE_FILE" ]; then
-            echo "::error::Decoded keystore is empty."
-            exit 1
-          fi
+          test -s "$KEYSTORE_FILE"
 
           export KEYSTORE_PATH="$KEYSTORE_FILE"
-
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
-          RELEASE_APK="app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -f "$RELEASE_APK" ]; then
-            echo "::error::Release APK not found at $RELEASE_APK"
+          APK_PATH="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::Signed release APK was not found at $APK_PATH"
+            find app/build/outputs -maxdepth 5 -type f -print || true
             exit 1
           fi
 
-          cp "$RELEASE_APK" dist/CancelBefore-release.apk
-          sha256sum dist/CancelBefore-release.apk
+          cp "$APK_PATH" dist/CancelBefore-release.apk
           ls -lh dist/CancelBefore-release.apk
 
       - name: Validate APK Files
         shell: bash
         run: |
           set -euo pipefail
-
-          if [ ! -f dist/CancelBefore-debug.apk ] &&
-             [ ! -f dist/CancelBefore-release.apk ]; then
-            echo "::error::No APK was generated."
-            exit 1
-          fi
-
+          test -s dist/CancelBefore-debug.apk
           ls -lh dist/
 
-      - name: Upload APKs
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: CancelBefore-APK
@@ -203,7 +216,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach APKs to Published GitHub Release
-        if: ${{ github.event_name == 'release' && github.event.action == 'published' }}
+        if: github.event_name == 'release' && github.event.action == 'published'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.apk
