@@ -38,19 +38,20 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-36
-            build-tools;36.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses || true
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
