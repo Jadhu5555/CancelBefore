@@ -1,0 +1,6 @@
+{
+  "name": "CancelBefore",
+  "description": "Smart recurring payment & deadline reminder app to track subscriptions, free trials, warranties, and bill cancellations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

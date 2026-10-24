@@ -1,0 +1,545 @@
+# CANCELBEFORE — PHASE 5: GOOGLE PLAY STORE LAUNCH READINESS
+
+## ROLE
+
+Act as a senior Android release engineer, Kotlin developer, mobile security reviewer, accessibility specialist, and Google Play compliance engineer.
+
+Continue the EXISTING CancelBefore Android application. Your job is to audit it and prepare it for a production release.
+
+This is an incremental release-hardening phase. Do not recreate the application, replace its architecture, or redesign functioning screens without a demonstrated need.
+
+**First inspect the actual source code, Gradle files, manifest, resources, tests, and Git changes. Then make the smallest safe changes necessary.**
+
+Do not claim the app is ready to publish merely because it compiles.
+
+## 1. Existing project context
+
+The available project reports describe an app with:
+
+- Native Android implementation using Kotlin.
+- Jetpack Compose and Material 3.
+- Room database, DataStore, MVVM, and StateFlow.
+- Subscription, free-trial, recurring-payment, bill, return, warranty, and document-expiry tracking.
+- Rule-based notification detection and detection review.
+- Reminder scheduling with AlarmManager, receivers, and reboot/time-change handling.
+- CSV export and JSON backup/restore.
+- Settings, light/dark themes, and a diagnostics screen.
+- Explicit Room migrations intended to preserve existing data.
+- A synthetic detection test suite.
+
+Possible existing source paths include `com/example`, `app/src/main/java/com/example/`, and `app/src/test/java/com/example/`. These are examples only. Discover the real package and source structure.
+
+Phase 4 Gmail integration must be treated as implemented only if the current repository proves that it exists and works. Do not assume Gmail OAuth is complete.
+
+## 2. Mandatory initial audit
+
+Before editing:
+
+1. Inspect the entire project structure.
+2. Read the application Gradle files, version catalog, root Gradle configuration, `AndroidManifest.xml`, ProGuard/R8 rules, app resources, navigation, database, repository, ViewModels, services, receivers, and tests.
+3. Identify the application ID, namespace, `minSdk`, `compileSdk`, `targetSdk`, version code, version name, Java/Kotlin toolchain, and Compose/compiler configuration.
+4. Inspect all declared permissions, exported components, deep links, services, receivers, backup rules, and network-security settings.
+5. Check for hardcoded credentials, test-only configuration, debug endpoints, development banners, fake data, placeholder buttons, incomplete TODOs, and misleading success states.
+6. Inspect the current Git status and preserve the user's existing uncommitted work.
+7. Run the current unit tests and debug build before making changes.
+8. Run lint and inspect any existing warnings or failures.
+9. Inspect existing launcher icons, adaptive icon resources, app name, splash screen, theme, and accessibility labels.
+10. Review Phase 4 Gmail functionality if present, including authorization scopes, disconnect behavior, local data handling, and OAuth configuration.
+
+Produce a concise audit report containing:
+- Current configuration.
+- Existing release blockers.
+- Working features that must be preserved.
+- Missing items.
+- Actual files that need changes.
+- Baseline test/build results.
+
+Do not overwrite files wholesale if focused edits are sufficient.
+
+## 3. Android and Google Play compatibility
+
+Inspect the current Android SDK configuration and prepare the project for the applicable Play submission requirements at the time of release.
+
+For an ordinary Android phone/tablet app, verify that the release targets Android 16 (API 36) or higher as required for new submissions and updates from August 31, 2026.
+
+Requirements:
+
+- Set compatible `compileSdk` and `targetSdk` values.
+- Check the installed SDK and Gradle/Android Gradle Plugin compatibility before upgrading.
+- Upgrade dependencies only when necessary.
+- Do not arbitrarily increase `minSdk` and exclude existing users.
+- Review Android 13+ notification permission behavior.
+- Verify edge-to-edge behavior and system-bar insets on newer Android versions.
+- Verify notification and alarm behavior against the targeted Android versions.
+- Check package visibility, exported components, intent filters, and pending-intent mutability.
+- Check whether any deprecated API use creates a release or security problem.
+- Resolve manifest merge conflicts.
+- Preserve existing functionality on supported older Android versions.
+- Document any incompatibility that cannot be safely resolved.
+
+Do not blindly upgrade every dependency to its latest version. Choose compatible stable versions and verify the result by building and testing.
+
+## 4. Production application configuration
+
+Prepare a clean release configuration.
+
+### Application identity
+
+- Preserve the existing application ID unless there is a confirmed reason to change it.
+- Ensure the displayed app name is consistently `CancelBefore`.
+- Confirm the version name and monotonically increasing version code.
+- Remove development-only labels, fake production data, debug-only navigation, and placeholder text from release builds.
+- Ensure release configuration does not use debug signing.
+- Verify the app does not rely on machine-specific local paths or credentials.
+- Confirm the release build can be reproduced from documented instructions.
+
+Never change the application ID casually: it affects the identity of the Play Store app.
+
+### Build variants and secrets
+
+- Separate debug and release configuration.
+- Ensure debug logging and verbose diagnostics are disabled or safely redacted in production.
+- Ensure API keys, OAuth secrets, keystore passwords, and private configuration are not committed.
+- Use environment variables or untracked local configuration for release signing credentials.
+- Add or update `.gitignore` for local secrets, signing files, build outputs, IDE state, and temporary data as appropriate.
+- Do not place private client secrets in the Android app. Values embedded in an APK or AAB must be treated as extractable.
+- Inspect the final release manifest and packaged resources for debug configuration and unintended permissions.
+
+If signing credentials are missing, document the steps needed to create or supply them securely. Never generate a fake release signature or report a signed release artifact that was not produced.
+
+## 5. Permission and policy audit
+
+Review every permission in the manifest and justify it against a user-visible feature.
+
+### Notifications
+
+- Request `POST_NOTIFICATIONS` at an appropriate point in the user journey on Android 13+.
+- Explain the benefit before asking.
+- Handle denial and subsequent permission changes gracefully.
+- Show the current notification capability in settings or diagnostics.
+- Never imply a reminder will definitely appear if notifications are disabled.
+
+### Notification access
+
+If `NotificationDetectionService` is present:
+
+- Keep scanning opt-in.
+- Explain that the service can inspect notifications from other apps.
+- Explain why this is necessary and what CancelBefore processes.
+- Do not imply universal detection across all payment providers.
+- Handle disabled access, revocation, and service reconnection.
+- Avoid collecting or transmitting unrelated notification content.
+- Keep sensitive content out of logs.
+- Ensure the feature remains disabled until the user explicitly enables it.
+
+### Exact alarms
+
+Audit the existing `SCHEDULE_EXACT_ALARM` or `USE_EXACT_ALARM` implementation.
+
+- Do not add `USE_EXACT_ALARM` merely to avoid asking the user for access.
+- Evaluate the appropriate permission based on the app's actual core functionality and current Play policy.
+- Prefer inexact alarms where acceptable.
+- If precise reminder timing is genuinely necessary, explain it clearly and handle special-access denial or revocation.
+- Check `canScheduleExactAlarms()` before scheduling exact alarms.
+- Provide a fallback when permission is unavailable.
+- Verify reminders are rescheduled correctly after permission changes, device reboot, app update, clock change, and timezone change.
+- Never claim that exact delivery is guaranteed under all Android power-management conditions.
+
+### Other permissions and components
+
+- Remove unnecessary permissions.
+- Do not add SMS, contacts, Accessibility, location, or broad storage permissions unless a genuine implemented feature requires them and their policy requirements are satisfied.
+- Review every exported service, receiver, activity, and provider.
+- Ensure exported components validate external input and do not expose internal data.
+- Verify FileProvider paths are restrictive.
+- Verify URI handling and imported files are validated.
+- Do not introduce a foreground service simply to keep a scanner running continuously.
+
+For every permission retained, record its purpose, when it is used, and how denial is handled.
+
+## 6. Privacy, data safety, and user trust
+
+CancelBefore deals with subscription information, payment amounts, notifications, and potentially email content. Privacy disclosures must accurately describe the actual implementation.
+
+Inspect the entire codebase and all SDKs for data collection, network requests, analytics, crash reporting, advertising, and third-party transmission.
+
+Create or update `docs/PRIVACY_POLICY.md` and any appropriate public-facing privacy-policy draft.
+
+The privacy policy must accurately address:
+
+- Information entered by users.
+- Subscription amounts, merchant names, dates, notes, and reminders.
+- Notification content accessed when the optional scanner is enabled.
+- Gmail access and extracted information, but only if Gmail integration actually exists.
+- What is stored locally.
+- Whether any data leaves the device.
+- Data retention and deletion.
+- Backup/export behavior.
+- Third-party SDKs and service providers actually used.
+- Security practices and their real limitations.
+- Contact information supplied by the developer.
+- Policy updates and an appropriate effective date.
+
+Do not invent a company address, support email, legal entity, or security certification. If required details are unavailable, leave clear placeholders in the documentation and list them as launch blockers.
+
+### Privacy implementation
+
+- Do not log payment details, raw notification text, email bodies, OAuth tokens, or private identifiers.
+- Avoid sending sensitive data to analytics or crash-reporting services.
+- Verify local data deletion behavior.
+- Verify that clearing data cancels pending reminders and alarms.
+- Inspect Android backup rules so that sensitive data is not unexpectedly copied or exposed.
+- Make backup/export behavior clear to users.
+- Ensure imported JSON and exported CSV are validated and handled safely.
+- If Gmail exists, ensure disconnect removes Gmail credentials and Gmail-specific cached data while preserving unrelated subscriptions.
+- Ensure the privacy policy is consistent with the actual network behavior and third-party SDK configuration.
+
+### Google Play Data safety
+
+Prepare a draft Data safety declaration based on actual source-code behavior, SDKs, and data flows.
+
+Document, for each relevant data category:
+
+- Whether it is collected.
+- Whether it is shared.
+- Purpose of use.
+- Whether processing is optional.
+- Retention and deletion behavior.
+- Whether processing occurs on-device only or involves transmission.
+
+Do not automatically declare that the app collects no data just because its main database is local. Verify all SDKs and network requests.
+
+The final Data safety form must be completed by the developer in Play Console using the verified implementation details.
+
+### Account deletion
+
+Inspect whether the app actually creates an application account.
+
+If it does, implement and document the account deletion functionality required by current Google Play policy, including an appropriate in-app deletion path and an external deletion-request path where required.
+
+If the app does not create an account, do not invent a meaningless account-deletion feature. Still provide an understandable way to clear local data and disconnect optional integrations.
+
+## 7. Release reliability and existing features
+
+Preserve and verify:
+
+- Subscription CRUD.
+- Free-trial tracking.
+- Renewal and deadline calculations.
+- Currency-safe financial summaries.
+- Reminder scheduling and cancellation.
+- Notification detection and deduplication.
+- Detection review, confirmation, editing, and dismissal.
+- Search, filters, sorting, and navigation.
+- CSV export.
+- JSON backup and restore.
+- Theme and currency preferences.
+- Diagnostics.
+- Gmail integration, if present and verified.
+
+Fix release-blocking defects without replacing the established architecture.
+
+Verify that:
+
+- Invalid or incomplete user input does not crash the app.
+- Missing dates are not fabricated.
+- Invalid URLs cannot launch unsafe intents.
+- Notification permission denial does not crash the app.
+- Exact-alarm permission denial does not crash the app.
+- Database migrations preserve existing data.
+- Clearing app data follows the documented user-facing behavior.
+- Reminder scheduling is idempotent and does not create duplicate alarms.
+- Long merchant names and notes do not break the UI.
+- Empty states and error states are useful and accurate.
+- Offline use remains functional for local features.
+- Background work respects lifecycle and system limits.
+- Release builds do not show test data or pretend a scan succeeded.
+
+Do not add subscriptions, advertisements, payment gateways, or monetization during this phase unless they already exist and are essential to the audited release configuration.
+
+## 8. UI, accessibility, and onboarding polish
+
+Keep the established CancelBefore visual identity, color palette, navigation, and Material 3 design.
+
+Improve only genuine usability issues.
+
+Review:
+
+- App icon and adaptive icon.
+- Splash screen.
+- First-launch experience.
+- Notification-permission explanation.
+- Optional notification-access explanation.
+- Gmail connection explanation, if supported.
+- Adding the first subscription.
+- Creating and editing reminders.
+- Empty states and error messages.
+- Settings and data deletion.
+- Small-screen layouts.
+- Large font scaling.
+- TalkBack labels and semantics.
+- Button touch targets.
+- Contrast in light and dark themes.
+- System bars and edge-to-edge insets.
+- Keyboard navigation and form validation.
+- Loading and progress indicators.
+- Rotation and activity recreation where applicable.
+
+Do not use a full-screen permission prompt immediately on launch without explaining the benefit. Do not force users to connect Gmail or enable notification access to use manual tracking.
+
+Add an onboarding flow only if the existing experience lacks the minimum necessary explanations. Keep onboarding short, skippable, and honest.
+
+## 9. Google Play Store listing assets and copy
+
+Prepare a store-listing package in the project documentation. Do not claim that these files have been uploaded to Play Console.
+
+Create:
+
+### Listing text
+
+- App title: `CancelBefore`.
+- A concise short description that fits the current Play Store character limit.
+- A full description with the main benefits and realistic feature claims.
+- Search-friendly language without keyword stuffing.
+- Clear disclosure that automatic detection works only with supported, enabled sources.
+- An honest statement that CancelBefore reminds users and helps them track subscriptions; it does not itself cancel subscriptions or bank mandates.
+- No claims of guaranteed savings, universal payment detection, or guaranteed notification delivery.
+- No fake reviews, invented statistics, or unverified testimonials.
+
+Suggested positioning: help users track recurring subscriptions, free trials, and important deadlines so they can act before unwanted charges occur.
+
+### Visual asset checklist
+
+Inspect the current logo and launcher assets. Prepare a checklist and, if the existing toolchain supports it, generate the actual required files for:
+
+- High-resolution app icon.
+- Feature graphic.
+- Phone screenshots.
+- Additional tablet screenshots if supported and worthwhile.
+
+Follow the current Play Console asset specifications. Validate dimensions, aspect ratios, file formats, and size limits. Do not merely rename a file to pretend it meets the required dimensions.
+
+Screenshots must show the real application. Do not present features that are not implemented. If screenshots cannot be captured from a running app, create a capture plan and clearly identify the missing assets.
+
+Use the existing branding, with a consistent, polished visual style.
+
+### Listing claims
+
+Create a table of every major claim in the store description and the implementation evidence that supports it.
+
+Mark any claim that cannot be verified as blocked until the feature is tested or remove it from the proposed listing.
+
+## 10. Required test plan
+
+Use the project's existing testing framework and add tests where appropriate.
+
+### Build and static checks
+
+Run and record the actual results of:
+
+- Existing JVM unit tests.
+- Room migration tests.
+- Detection tests.
+- Reminder calculation and scheduling tests.
+- CSV and JSON backup/restore tests.
+- Android lint.
+- Debug build.
+- Release build.
+- Release manifest inspection.
+- Dependency/security review where supported.
+
+Do not delete, skip, or weaken existing tests to achieve a green build.
+
+### Migration and persistence
+
+Test:
+
+- Upgrade from the previous database schema.
+- Preservation of subscription records.
+- Preservation of detection candidates and review states.
+- Backup and restore.
+- Malformed backup rejection.
+- Data clearing and reminder cancellation.
+- Repeated launches and process recreation.
+- Reboot/time-change reminder rescheduling where testable.
+
+### Permissions and reminders
+
+Test:
+
+- Notification permission granted.
+- Notification permission denied.
+- Notification access enabled and disabled.
+- Exact-alarm access available and unavailable.
+- Permission revoked after reminders have been scheduled.
+- Device reboot.
+- Timezone and system-clock change.
+- Duplicate reminder prevention.
+- Cancelled records no longer receive inappropriate reminders.
+- Correct handling of past deadlines.
+
+### UI and usability
+
+Test:
+
+- First launch.
+- Add, edit, and delete a subscription.
+- Add a free trial.
+- Review and dismiss a detected candidate.
+- Confirm a candidate and verify the resulting record.
+- Empty state.
+- Search, filters, and sorting.
+- Light and dark themes.
+- CSV export.
+- JSON backup and restore.
+- Settings and data reset.
+- Long text and large fonts.
+- Offline behavior.
+- No crashes during navigation or activity recreation.
+
+### Gmail tests if Phase 4 is present
+
+- OAuth cancellation.
+- Authorization failure.
+- Scan success and no-results state.
+- API failure.
+- Duplicate detection prevention.
+- Disconnect and local cleanup.
+- No email content or token leakage in logs.
+- Gmail functionality remains optional.
+
+Use fakes for automated OAuth/API tests. Never require a real Gmail account for the standard unit test suite.
+
+### Physical-device smoke tests
+
+If a device or emulator is available, perform as many as possible and document the actual results.
+
+At minimum, the manual test plan should cover:
+
+- Fresh installation.
+- App update over a previous installation.
+- Permission grant/denial.
+- Reminder delivery.
+- Background/force-stop behavior and relevant Android restrictions.
+- Data preservation.
+- Export/restore.
+- Release build launch.
+- Basic accessibility and responsive layout.
+
+Do not claim a physical-device test passed if it was not performed.
+
+## 11. Play Console submission checklist
+
+Create `docs/PLAY_STORE_RELEASE_CHECKLIST.md`.
+
+Include all applicable release tasks:
+
+- Developer account and app registration.
+- Unique application ID.
+- App signing and Play App Signing setup.
+- Version code/name.
+- Signed Android App Bundle (`.aab`).
+- Release build validation.
+- Internal testing track.
+- Closed testing and any applicable testing requirements for the developer account.
+- Pre-launch report review.
+- Store listing.
+- Icon, feature graphic, screenshots, and descriptions.
+- Privacy policy URL.
+- Data safety form.
+- App access instructions if any part of the app is restricted.
+- Ads declaration.
+- Content rating questionnaire.
+- Target audience and age-group declarations.
+- Permission declarations, including any required exact-alarm or other special-access declaration.
+- OAuth verification if Gmail functionality requires it.
+- Country/region availability.
+- Pricing and distribution.
+- Release notes.
+- Review submission.
+- Monitoring crashes, ANRs, and user feedback after launch.
+
+Verify the current Play Console requirements rather than assuming every app uses the same testing process.
+
+Separate tasks into:
+1. Completed and verified in the codebase.
+2. Requires a physical device or external configuration.
+3. Must be completed by the developer in Play Console.
+4. Blocked by missing information or policy review.
+
+Never claim that the app has been published, approved, or submitted unless the corresponding action actually occurred.
+
+## 12. Release artifact
+
+If the environment supports building and signing, generate a release Android App Bundle using the project's existing configuration and securely supplied signing credentials.
+
+The intended output is:
+
+`app/build/outputs/bundle/release/app-release.aab`
+
+Treat that path as the expected output only; verify that the file actually exists before reporting it.
+
+Requirements:
+
+- Use release configuration.
+- Do not use debug signing for a production upload.
+- Do not commit keystores, passwords, or private secrets.
+- Verify the artifact's package ID and version.
+- Verify that the release build completes.
+- Record the build command and actual result.
+- Provide a checksum if the environment supports it.
+- If signing credentials or the required SDK are missing, produce the unambiguous remaining steps instead of fabricating an artifact.
+
+Do not overwrite or delete the user's previous release artifact without explicit need.
+
+## 13. Acceptance criteria
+
+Phase 5 is complete only when every applicable criterion is either verified or clearly marked as an external blocker.
+
+1. The existing project has been inspected before changes.
+2. Existing working functionality remains intact.
+3. The project builds successfully with a compatible Android toolchain.
+4. The target SDK satisfies the applicable Play submission requirement.
+5. The release manifest contains only justified permissions and properly configured components.
+6. Notification and exact-alarm permission flows handle denial and revocation.
+7. Existing database records survive upgrades.
+8. No debug credentials or private secrets are included in the release.
+9. Sensitive notification/email/payment content is not leaked through logs.
+10. Privacy-policy and Data safety drafts reflect the actual implementation.
+11. Store listing copy is complete and contains only substantiated claims.
+12. Store asset requirements and missing assets are documented.
+13. Existing automated tests pass, and new release tests pass.
+14. Lint, debug build, and release build results are recorded.
+15. The release artifact exists and is verified if the environment supports its generation.
+16. A Play Console submission checklist is complete.
+17. External tasks such as account verification, OAuth verification, physical-device tests, and Play Console declarations are explicitly identified.
+18. No test result, approval, upload, or publication is fabricated.
+
+## 14. Execution sequence
+
+**Step A — Audit:** Inspect the actual codebase and run baseline tests.
+
+**Step B — Risk review:** Identify release blockers involving SDK levels, permissions, privacy, security, data migration, and incomplete features.
+
+**Step C — Implement:** Make minimal, targeted changes while preserving the established architecture.
+
+**Step D — Validate:** Run tests, lint, debug/release builds, and artifact inspection where possible.
+
+**Step E — Prepare listing:** Produce store copy, asset checklist, privacy-policy draft, Data safety worksheet, and Play Console checklist.
+
+**Step F — Report:** Provide an honest final report containing:
+
+- Actual files changed.
+- Issues found and fixed.
+- Existing features preserved.
+- SDK and permission configuration.
+- Tests and commands actually run.
+- Actual build and lint results.
+- Release artifact location if verified.
+- Remaining manual steps.
+- Current publication blockers.
+- A final go/no-go recommendation.
+
+Do not stop at a generic plan if code editing and testing are available. Implement and validate the feasible work. If a step depends on unavailable credentials, a physical device, or Play Console access, clearly state that limitation.
+
+**Final priority:** Preserve the current CancelBefore app, protect user data, avoid unnecessary permissions, make all store claims truthful, and prepare a genuine production release rather than a demo build.
