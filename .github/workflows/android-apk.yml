@@ -2,17 +2,18 @@ name: Android CI & APK Distribution
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       build_release_if_signed:
-        description: 'Attempt signed release build if secrets are configured (true/false)'
+        description: 'Attempt signed release build if secrets are configured'
         required: false
         default: 'true'
+        type: boolean
   release:
-    types: [ published ]
+    types: [published]
 
 permissions:
   contents: write
@@ -25,14 +26,15 @@ jobs:
   test:
     name: Run Unit & Robolectric Tests
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       - name: Setup Gradle
@@ -41,11 +43,23 @@ jobs:
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Restore Debug Keystore
+      - name: Generate Debug Keystore
+        shell: bash
         run: |
-          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
-            echo "Restoring debug keystore from base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
+          set -euo pipefail
+
+          # Gradle configuration currently expects this file in the project root.
+          if [ ! -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
+            echo "Generating temporary debug keystore..."
+            keytool -genkeypair \
+              -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Run Unit Tests
@@ -58,19 +72,21 @@ jobs:
           name: test-results
           path: app/build/reports/tests/testDebugUnitTest/
           retention-days: 7
+          if-no-files-found: ignore
 
   build:
     name: Build & Package APK
     needs: test
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       - name: Setup Gradle
@@ -79,66 +95,93 @@ jobs:
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew
 
-      - name: Restore Debug Keystore
+      - name: Generate Debug Keystore
+        shell: bash
         run: |
-          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
-            echo "Restoring debug keystore from base64..."
-            base64 -d debug.keystore.base64 > debug.keystore
+          set -euo pipefail
+
+          # The Gradle debugConfig points to the repository-root debug.keystore.
+          if [ ! -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
+            echo "Generating temporary debug keystore..."
+            keytool -genkeypair \
+              -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
       - name: Prepare Output Directory
-        run: mkdir -p dist/
+        run: mkdir -p dist
 
       - name: Build Debug APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "Building debug APK..."
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
-          
+
           DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+
           if [ ! -f "$DEBUG_APK" ]; then
-            echo "::error::Debug APK build failed! Expected file at $DEBUG_APK does not exist."
+            echo "::error::Expected APK not found: $DEBUG_APK"
             exit 1
           fi
-          
-          # Copy to distribution folder with clean user-friendly filename
+
           cp "$DEBUG_APK" dist/CancelBefore-debug.apk
-          echo "Debug APK successfully generated: $(ls -lh dist/CancelBefore-debug.apk)"
+          ls -lh dist/CancelBefore-debug.apk
 
       - name: Build Signed Release APK (if secrets configured)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_release_if_signed }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        shell: bash
         run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "Signing secrets detected. Decoding upload keystore..."
-            echo "$KEYSTORE_BASE64" | base64 -d > "${GITHUB_WORKSPACE}/my-upload-key.jks"
-            export KEYSTORE_PATH="${GITHUB_WORKSPACE}/my-upload-key.jks"
-            
+          set -euo pipefail
+
+          if [ -n "${KEYSTORE_BASE64:-}" ] &&
+             [ -n "${STORE_PASSWORD:-}" ] &&
+             [ -n "${KEY_PASSWORD:-}" ]; then
+
+            KEYSTORE_FILE="$GITHUB_WORKSPACE/my-upload-key.jks"
+            trap 'rm -f "$KEYSTORE_FILE"' EXIT
+
+            echo "Decoding release upload keystore..."
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+            export KEYSTORE_PATH="$KEYSTORE_FILE"
+
             echo "Building signed release APK..."
             ./gradlew :app:assembleRelease --no-daemon --stacktrace
-            
+
             RELEASE_APK="app/build/outputs/apk/release/app-release.apk"
-            if [ -f "$RELEASE_APK" ]; then
-              cp "$RELEASE_APK" dist/CancelBefore-release.apk
-              echo "Release APK successfully created: $(ls -lh dist/CancelBefore-release.apk)"
-            else
-              echo "::warning::Release APK task ran but app-release.apk was not found."
+
+            if [ ! -f "$RELEASE_APK" ]; then
+              echo "::error::Release build completed without the expected APK: $RELEASE_APK"
+              exit 1
             fi
-            
-            # Clean up private keystore file immediately
-            rm -f "${GITHUB_WORKSPACE}/my-upload-key.jks"
+
+            cp "$RELEASE_APK" dist/CancelBefore-release.apk
+            ls -lh dist/CancelBefore-release.apk
           else
-            echo "Notice: Release signing secrets (KEYSTORE_BASE64, STORE_PASSWORD, KEY_PASSWORD) are not configured."
-            echo "Using CancelBefore-debug.apk for direct device testing and beta distribution."
+            echo "Release signing secrets are not configured."
+            echo "The debug APK will be provided for testing."
           fi
 
       - name: Validate Generated Artifacts
+        shell: bash
         run: |
-          echo "Checking distribution artifacts..."
+          set -euo pipefail
           ls -lh dist/
-          if [ ! -f dist/CancelBefore-debug.apk ] && [ ! -f dist/CancelBefore-release.apk ]; then
-            echo "::error::No APKs were created in dist/ folder!"
+
+          if [ ! -f dist/CancelBefore-debug.apk ] &&
+             [ ! -f dist/CancelBefore-release.apk ]; then
+            echo "::error::No APKs were generated."
             exit 1
           fi
 
